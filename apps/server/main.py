@@ -44,9 +44,9 @@ from sqlalchemy import text
 
 app = FastAPI()
 
-# ...existing code...
+
 import urllib.request
-    # ...existing code...
+
 
 @app.get("/health", include_in_schema=False)
 def health():
@@ -66,8 +66,14 @@ def health():
     try:
         zep_url = getattr(Config, "ZEP_API_URL", None)
         if zep_url:
-            urllib.request.urlopen(zep_url, timeout=2)
-            status["zep"] = "ok"
+            try:
+                urllib.request.urlopen(zep_url, timeout=2)
+                status["zep"] = "ok"
+            except urllib.error.HTTPError as he:
+                # service reachable but endpoint returned HTTP error (e.g. 404)
+                status["zep"] = f"reachable_http_{he.code}"
+            except Exception as e:
+                status["zep"] = f"error: {e}"
         else:
             status["zep"] = "not_configured"
     except Exception as e:
