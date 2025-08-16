@@ -39,9 +39,52 @@ from resolvers.account import AccountMutation, AccountQuery
 from resolvers.context import get_context
 from resolvers.user import UserMutation, UserQuery
 from typings.auth import AuthJWTSettings
+import importlib
+from sqlalchemy import text
 
 app = FastAPI()
 
+# ...existing code...
+import urllib.request
+    # ...existing code...
+
+@app.get("/health", include_in_schema=False)
+def health():
+    """
+    Basic health check: DB connectivity, optional Zep URL, XAgent importability.
+    """
+    status = {"status": "ok"}
+    # DB check
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        status["db"] = "ok"
+    except Exception as e:
+        status["db"] = f"error: {e}"
+
+    # Zep URL check (if configured)
+    try:
+        zep_url = getattr(Config, "ZEP_API_URL", None)
+        if zep_url:
+            urllib.request.urlopen(zep_url, timeout=2)
+            status["zep"] = "ok"
+        else:
+            status["zep"] = "not_configured"
+    except Exception as e:
+        status["zep"] = f"error: {e}"
+
+    # XAgent importability (try common module paths)
+    try:
+        importlib.import_module("XAgent.config")
+        status["xagent_config"] = "ok"
+    except Exception:
+        try:
+            importlib.import_module("XAgent.XAgent.config")
+            status["xagent_config"] = "ok"
+        except Exception as e:
+            status["xagent_config"] = f"error: {e}"
+
+    return status
 
 @strawberry.type
 class Query(AccountQuery, UserQuery):
@@ -108,7 +151,6 @@ app.add_middleware(CustomCORSMiddleware)
 @AuthJWT.load_config
 def get_config():
     return AuthJWTSettings()
-
 
 # exception handler for authjwt
 # in production, you can tweak performance using orjson response
