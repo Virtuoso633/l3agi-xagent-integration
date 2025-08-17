@@ -1,12 +1,6 @@
 import asyncio
 
-from langchain import hub
-from langchain.agents import (AgentExecutor, AgentType, create_react_agent,
-                              initialize_agent)
-
 from agents.base_agent import BaseAgent
-from agents.conversational.output_parser import ConvoOutputParser
-from agents.conversational.streaming_aiter import AsyncCallbackHandler
 from agents.handle_agent_errors import handle_agent_error
 from config import Config
 from memory.zep.zep_memory import ZepMemory
@@ -19,6 +13,8 @@ from typings.config import AccountSettings, AccountVoiceSettings
 from utils.model import get_llm
 from utils.system_message import SystemMessageBuilder
 
+# Import our new adapter
+from agents.conversational.xagent_adapter import XAgentAdapter
 
 class ConversationalAgent(BaseAgent):
     async def run(
@@ -27,7 +23,7 @@ class ConversationalAgent(BaseAgent):
         voice_settings: AccountVoiceSettings,
         chat_pubsub_service: ChatPubSubService,
         agent_with_configs: AgentWithConfigsOutput,
-        tools,
+        tools, # This is now ignored by our implementation
         prompt: str,
         voice_url: str,
         history: PostgresChatMessageHistory,
@@ -57,98 +53,47 @@ class ConversationalAgent(BaseAgent):
                 configs = agent_with_configs.configs
                 prompt = speech_to_text(voice_url, configs, voice_settings)
 
-            llm = get_llm(
-                settings,
-                agent_with_configs,
+            # --- START: Langchain Agent Replacement ---
+
+            # 1. Format conversation history and prompt into a single task for XAgent.
+            chat_history = memory.load_memory_variables({}).get("chat_history", [])
+            full_task_description = (
+                "You are an advanced AI assistant. Please perform the following task based on the "
+                "conversation history and the latest user request.\n\n"
+                "--- Conversation History ---\n"
+            )
+            for msg in chat_history:
+                full_task_description += f"[{msg.type.upper()}]: {msg.content}\n"
+            
+            full_task_description += (
+                f"\n--- Latest User Request ---\n{prompt}\n\n"
+                f"--- System Instructions ---\n{system_message}\n"
             )
 
-            streaming_handler = AsyncCallbackHandler()
+            # 2. Instantiate and run the XAgentAdapter.
+            # IMPORTANT: We will place XAgent's config file in the L3AGI server's root.
+            xagent_config_path = "xagent_config.yml" 
+            adapter = XAgentAdapter(config_file=xagent_config_path)
+            
+            # The adapter runs the task and returns the final result as a single string.
+            # We yield it to fit into the async generator structure of the `run` method.
+            res = await adapter.run(task=full_task_description)
+            yield res
 
-            llm.streaming = True
-            # llm.callbacks = [
-            #     run_logs_manager.get_agent_callback_handler(),
-            #     streaming_handler,
-            # ]
-
-            # agent = initialize_agent(
-            #     tools,
-            #     llm,
-            #     agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
-            #     verbose=True,
-            #     memory=memory,
-            #     handle_parsing_errors="Check your output and make sure it conforms!",
-            #     agent_kwargs={
-            #         "system_message": system_message,
-            #         "output_parser": ConvoOutputParser(),
-            #     },
-            #     callbacks=[run_logs_manager.get_agent_callback_handler()],
-            # )
-
-            agentPrompt = hub.pull("hwchase17/react")
-
-            agent = create_react_agent(llm, tools, prompt=agentPrompt)
-
-            agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
-
-            chunks = []
-            final_answer_detected = False
-
-            async for event in agent_executor.astream_events(
-                {"input": prompt}, version="v1"
-            ):
-                kind = event["event"]
-
-                if kind == "on_chat_model_stream":
-                    content = event["data"]["chunk"].content
-                    if content:
-                        chunks.append(content)
-                        # Check if the last three elements in chunks, when stripped, are "Final", "Answer", and ":"
-                        if (
-                            len(chunks) >= 3
-                            and chunks[-3].strip() == "Final"
-                            and chunks[-2].strip() == "Answer"
-                            and chunks[-1].strip() == ":"
-                        ):
-                            final_answer_detected = True
-                            continue
-
-                        if final_answer_detected:
-                            yield content
-
-            full_response = "".join(chunks)
-            final_answer_index = full_response.find("Final Answer:")
-            if final_answer_index != -1:
-                # Add the length of the phrase "Final Answer:" and any subsequent whitespace or characters you want to skip
-                start_index = final_answer_index + len("Final Answer:")
-                # Optionally strip leading whitespace
-                res = full_response[start_index:].lstrip()
-            else:
-                res = "Final Answer not found in response."
+            # --- END: Langchain Agent Replacement ---
 
         except Exception as err:
             res = handle_agent_error(err)
-
-            memory.save_context(
-                {
-                    "input": prompt,
-                    "chat_history": memory.load_memory_variables({})["chat_history"],
-                },
-                {
-                    "output": res,
-                },
-            )
-
             yield res
 
+        # The rest of the function remains the same for handling voice output and PubSub
         try:
             configs = agent_with_configs.configs
             voice_url = None
             if "Voice" in configs.response_mode:
                 voice_url = text_to_speech(res, configs, voice_settings)
-                pass
         except Exception as err:
             res = f"{res}\n\n{handle_agent_error(err)}"
-
             yield res
 
         ai_message = history.create_ai_message(

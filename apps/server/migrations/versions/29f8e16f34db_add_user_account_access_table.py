@@ -41,9 +41,10 @@ def upgrade() -> None:
     op.create_index(op.f('ix_user_account_access_is_deleted'), 'user_account_access', ['is_deleted'], unique=False)
     op.create_index(op.f('ix_user_account_access_modified_by'), 'user_account_access', ['modified_by'], unique=False)
     op.alter_column('run_log', 'toolkit_id',
-               existing_type=sa.VARCHAR(length=255),
-               type_=sa.UUID(),
-               existing_nullable=True)
+            existing_type=sa.VARCHAR(length=255),
+            type_=sa.UUID(),
+            existing_nullable=True,
+            postgresql_using="toolkit_id::uuid")
     # ### end Alembic commands ###
 
 
@@ -52,7 +53,8 @@ def downgrade() -> None:
     op.alter_column('run_log', 'toolkit_id',
                existing_type=sa.UUID(),
                type_=sa.VARCHAR(length=255),
-               existing_nullable=True)
+               existing_nullable=True,
+               postgresql_using="toolkit_id::varchar")
     op.drop_index(op.f('ix_user_account_access_modified_by'), table_name='user_account_access')
     op.drop_index(op.f('ix_user_account_access_is_deleted'), table_name='user_account_access')
     op.drop_index(op.f('ix_user_account_access_id'), table_name='user_account_access')

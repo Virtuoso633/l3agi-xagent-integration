@@ -17,21 +17,26 @@ services:
       dockerfile: docker/Dockerfile
     volumes:
       - ./apps/server:/code
+      - ../XAgent:/code/XAgent:ro 
     ports:
       - "4000:4000"
     depends_on:
       - db
+    environment:
+      - PYTHONPATH=/code:/code/XAgent
+      - DB_PORT=5434
+      - CONFIG_FILE=/code/XAgent/assets/config.yml
 
   db:
     image: postgres:14
     restart: always
     environment:
-      POSTGRES_DB: l3-db
+      POSTGRES_DB: l3agi
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       PGPORT: 5434
     ports:
-      - "5434:5434"
+      - "5434:5432"
     volumes:
       - l3_db_data:/var/lib/postgresql/data
 
@@ -56,11 +61,11 @@ services:
       - ./zep/.env
     restart: on-failure
     healthcheck:
-      test: timeout 10s bash -c ':> /dev/tcp/127.0.0.1/5557' || exit 1
+      test: ["CMD-SHELL","/app/.venv/bin/python -c \"import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:5557/', timeout=5)\" || exit 1"]
       interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 45s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
     ports:
       - "5557:5557"
   zep:
@@ -86,11 +91,11 @@ services:
     env_file:
       - ./zep/.env
     healthcheck:
-      test: timeout 10s bash -c ':> /dev/tcp/127.0.0.1/8000' || exit 1
-      interval: 5s
+      test: ["CMD-SHELL","curl -fsS http://127.0.0.1:8000/ || exit 1"]
+      interval: 10s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 6
+      start_period: 120s
 
 volumes:
   l3_db_data:

@@ -10,10 +10,12 @@ WORKDIR /code
 # Install dependencies
 COPY pyproject.toml poetry.lock /code/
 
-RUN pip install poetry \
+# Final RUN command: Remove the lock file and let poetry resolve fresh dependencies.
+RUN pip install --upgrade pip \
+    && pip install "poetry==1.7.1" \
     && poetry config virtualenvs.create false \
+    && rm poetry.lock \
     && poetry install --no-interaction --no-ansi
-
 
 # Copy project
 COPY ./ /code/

@@ -18,6 +18,10 @@ from utils.user import \
     convert_model_to_response as convert_model_to_response_user
 
 
+from fastapi_jwt_auth.exceptions import InvalidHeaderError, AuthJWTException
+import logging
+
+
 def register(input: RegisterInput):
     """
     Register
@@ -97,19 +101,41 @@ def login_with_github(name: str, email: str, account_name: str, avatar: Optional
     return user
 
 
+
+logger = logging.getLogger(__name__)
+
 def authorize(account_id: str, Authorize: AuthJWT = Depends()) -> UserAccount:
+    """
+    Validate JWT and return UserAccount. Raises HTTPException(401) on invalid token
+    or 404 when user/account not found.
+    """
     try:
         email = Authorize.get_jwt_subject()
-        db_user = UserModel.get_user_by_email(db, email)
-        if account_id == "undefined" or not account_id:
-            db_account = AccountModel.get_account_created_by(db, db_user.id)
-        else:
-            db_account = AccountModel.get_account_by_access(
-                db, user_id=db_user.id, account_id=account_id
-            )
-        return UserAccount(
-            user=convert_model_to_response_user(db_user),
-            account=convert_model_to_response_account(db_account),
-        )
-    except Exception:
+    except (InvalidHeaderError, AuthJWTException) as err:
+        logger.debug("JWT decode/header error: %s", err)
         raise HTTPException(status_code=401, detail="Invalid auth token")
+    except Exception as err:
+        logger.exception("Unexpected error verifying JWT")
+        raise HTTPException(status_code=401, detail="Invalid auth token")
+
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid auth token")
+
+    db_user = UserModel.get_user_by_email(db, email)
+    if not db_user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    if account_id == "undefined" or not account_id:
+        db_account = AccountModel.get_account_created_by(db, db_user.id)
+    else:
+        db_account = AccountModel.get_account_by_access(
+            db, user_id=db_user.id, account_id=account_id
+        )
+
+    if not db_account:
+        raise HTTPException(status_code=404, detail="Account not found or access denied")
+
+    return UserAccount(
+        user=convert_model_to_response_user(db_user),
+        account=convert_model_to_response_account(db_account),
+    )
